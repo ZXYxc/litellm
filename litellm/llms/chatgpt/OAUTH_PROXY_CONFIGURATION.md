@@ -39,4 +39,16 @@ export NO_PROXY=localhost,127.0.0.1
 
 ## 验证要求
 
-单元测试覆盖默认值、显式 `true`、显式 `false`、大小写与空白，以及非法值。集成验证使用真实的 `/chatgpt/oauth/device/start` 接口，确认必须经过环境代理的运行环境能够获得 Device Flow，而 `false` 仍保持不读取代理的行为。
+单元测试覆盖默认值、显式 `true`、显式 `false`、大小写与空白，以及非法值。网络验证使用相同 runtime 配置请求真实 OpenAI Device Authorization endpoint，确认必须经过环境代理的运行环境能够获得 Device Flow，而 `false` 仍保持不读取代理的行为。完整管理接口验证需要使用新环境变量重启 LiteLLM Proxy。
+
+## TDD 验证证据
+
+| 保证 | 测试或命令 | 结果 |
+| --- | --- | --- |
+| 未配置时保持 `false` | `pytest tests/proxy_unit_tests/chatgpt_oauth/test_runtime.py -q` | PASS |
+| `true`、`false`、大小写和空白被正确解析 | 同上 | PASS |
+| 非法值不会静默改变网络路径 | 同上 | PASS |
+| `false` 不读取 HTTPS 代理 | 使用真实 OpenAI device authorization endpoint | HTTP 403，复现直连地区限制 |
+| `true` 读取 HTTPS 代理 | 使用真实 OpenAI device authorization endpoint | HTTP 200，返回 Device Auth ID 和 User Code |
+
+RED 阶段测试因 `get_chatgpt_oauth_trust_env` 尚不存在而无法导入。GREEN 阶段同一测试文件共 6 项通过。全量 lint、类型预算、循环导入和 import safety 检查使用本地已有的 `origin/litellm_internal_staging` ref 通过；内部 GitLab fetch 在当前网络环境中无法完成。覆盖率插件运行出现异常高 CPU 且长时间不结束，已停止该次覆盖率采集；相关纯函数的全部分支由 6 个测试用例覆盖。

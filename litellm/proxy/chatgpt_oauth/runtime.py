@@ -2,6 +2,7 @@ import asyncio
 import os
 import random
 import socket
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -84,6 +85,19 @@ class ChatGPTOAuthRuntimeHolder:
 _runtime_holder = ChatGPTOAuthRuntimeHolder()
 
 
+def get_chatgpt_oauth_trust_env(environment: Mapping[str, str] = os.environ) -> bool:
+    raw_value = environment.get("CHATGPT_OAUTH_TRUST_ENV")
+    if raw_value is None:
+        return False
+    match raw_value.strip().casefold():
+        case "true":
+            return True
+        case "false":
+            return False
+        case _:
+            raise ValueError("CHATGPT_OAUTH_TRUST_ENV must be either true or false")
+
+
 async def initialize_chatgpt_oauth_runtime(
     prisma_client: Any,
     router: Any,
@@ -96,7 +110,11 @@ async def initialize_chatgpt_oauth_runtime(
     def clock() -> datetime:
         return datetime.now(timezone.utc)
 
-    http_client = httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False)
+    http_client = httpx.AsyncClient(
+        timeout=15,
+        follow_redirects=False,
+        trust_env=get_chatgpt_oauth_trust_env(),
+    )
     cipher = ChatGPTOAuthTokenCipher.from_environment()
     repository = PrismaChatGPTOAuthAccountRepository(prisma_client, cipher, clock)
     flow_repository = PrismaChatGPTOAuthFlowRepository(prisma_client, cipher)
