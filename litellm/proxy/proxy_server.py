@@ -366,6 +366,9 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
+from litellm.proxy.management_endpoints.chatgpt_oauth_endpoints import (
+    router as chatgpt_oauth_management_router,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
     _user_has_admin_view,
@@ -1069,6 +1072,10 @@ async def proxy_startup_event(app: FastAPI):
         ## SYNC UI SETTINGS ##
         await ProxyStartupEvent._sync_ui_settings_to_general_settings()
 
+        from litellm.proxy.chatgpt_oauth.runtime import initialize_chatgpt_oauth_runtime
+
+        await initialize_chatgpt_oauth_runtime(prisma_client, llm_router)
+
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:
         asyncio.create_task(_run_background_health_check())  # start the background health check coroutine.
@@ -1120,6 +1127,10 @@ async def proxy_startup_event(app: FastAPI):
             await prisma_client.db.stop_token_refresh_task()
         except Exception as e:
             verbose_proxy_logger.error(f"Error stopping token refresh task: {e}")
+
+    from litellm.proxy.chatgpt_oauth.runtime import shutdown_chatgpt_oauth_runtime
+
+    await shutdown_chatgpt_oauth_runtime()
 
     # Shutdown event - stop Prisma DB health watchdog task
     if prisma_client is not None and hasattr(prisma_client, "stop_db_health_watchdog_task"):
@@ -16194,6 +16205,7 @@ app.include_router(spend_management_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(callback_management_endpoints_router)
+app.include_router(chatgpt_oauth_management_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)

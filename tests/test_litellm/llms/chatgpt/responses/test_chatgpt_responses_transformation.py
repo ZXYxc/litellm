@@ -86,6 +86,34 @@ class TestChatGPTResponsesAPITransformation:
         assert headers["accept"] == "text/event-stream"
         assert headers["session_id"] == "session-123"
 
+    @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
+    def test_database_credential_overrides_untrusted_headers(
+        self, mock_authenticator_class
+    ):
+        mock_auth_instance = MagicMock()
+        mock_authenticator_class.return_value = mock_auth_instance
+        config = ChatGPTResponsesAPIConfig()
+        litellm_params = GenericLiteLLMParams(
+            chatgpt_oauth_credential_id="credential-a",
+            chatgpt_oauth_resolved=True,
+            api_key="database-access-token",
+            chatgpt_account_id="database-account-id",
+        )
+
+        headers = config.validate_environment(
+            headers={
+                "Authorization": "Bearer attacker-token",
+                "ChatGPT-Account-Id": "attacker-account",
+            },
+            model="gpt-5.4",
+            litellm_params=litellm_params,
+        )
+
+        assert headers["Authorization"] == "Bearer database-access-token"
+        assert headers["ChatGPT-Account-Id"] == "database-account-id"
+        mock_auth_instance.get_access_token.assert_not_called()
+        mock_auth_instance.get_account_id.assert_not_called()
+
     @pytest.mark.parametrize(
         "model_name",
         [

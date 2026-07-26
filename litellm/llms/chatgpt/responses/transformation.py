@@ -44,18 +44,44 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str,
         litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
-        try:
-            access_token = self.authenticator.get_access_token()
-        except GetAccessTokenError as e:
-            raise AuthenticationError(
-                model=model,
-                llm_provider="chatgpt",
-                message=str(e),
-            )
-
-        account_id = self.authenticator.get_account_id()
+        database_credential_id = (
+            litellm_params.get("chatgpt_oauth_credential_id") if litellm_params is not None else None
+        )
+        if database_credential_id:
+            access_token = litellm_params.get("api_key") if litellm_params is not None else None
+            account_id = litellm_params.get("chatgpt_account_id") if litellm_params is not None else None
+            resolved = litellm_params.get("chatgpt_oauth_resolved") if litellm_params is not None else False
+            if not resolved or not isinstance(access_token, str) or not access_token:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider="chatgpt",
+                    message=f"ChatGPT OAuth credential was not resolved: {database_credential_id}",
+                )
+            if not isinstance(account_id, str) or not account_id:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider="chatgpt",
+                    message=f"ChatGPT OAuth credential has no account identity: {database_credential_id}",
+                )
+        else:
+            try:
+                access_token = self.authenticator.get_access_token()
+            except GetAccessTokenError as e:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider="chatgpt",
+                    message=str(e),
+                )
+            account_id = self.authenticator.get_account_id()
         session_id = ensure_chatgpt_session_id(litellm_params)
         default_headers = get_chatgpt_default_headers(access_token, account_id, session_id)
+        if database_credential_id:
+            return {
+                **default_headers,
+                **headers,
+                "Authorization": default_headers["Authorization"],
+                "ChatGPT-Account-Id": default_headers["ChatGPT-Account-Id"],
+            }
         return {**default_headers, **headers}
 
     def transform_responses_api_request(

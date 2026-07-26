@@ -45,6 +45,46 @@ model LiteLLM_CredentialsTable {
   updated_by String
 }
 
+model LiteLLM_ChatGPTOAuthAccountTable {
+  credential_id String @id @default(uuid())
+  credential_name String @unique
+  provider String @default("chatgpt")
+  email_encrypted String
+  email_fingerprint String @unique
+  account_id_encrypted String
+  token_record_encrypted String
+  status String @default("active")
+  expires_at DateTime
+  token_version Int @default(1)
+  refresh_lease_owner String?
+  refresh_lease_until DateTime?
+  refresh_failure_count Int @default(0)
+  refresh_backoff_until DateTime?
+  last_refresh_error String?
+  created_at DateTime @default(now()) @map("created_at")
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+
+  @@index([status, expires_at])
+  @@index([refresh_lease_until])
+}
+
+model LiteLLM_ChatGPTOAuthFlowTable {
+  flow_id String @id @default(uuid())
+  credential_id String?
+  encrypted_flow_record String
+  requested_by String
+  purpose String
+  status String @default("pending")
+  expires_at DateTime
+  created_at DateTime @default(now()) @map("created_at")
+  updated_at DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([requested_by, status])
+  @@index([expires_at])
+}
+
 // Models on proxy
 model LiteLLM_ProxyModelTable {
   model_id String @id @default(uuid())

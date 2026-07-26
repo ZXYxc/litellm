@@ -294,6 +294,13 @@ const menuGroups: MenuGroup[] = [
             roles: all_admin_roles,
           },
           {
+            key: "chatgpt-oauth",
+            page: "chatgpt-oauth",
+            label: "ChatGPT Accounts",
+            icon: <KeyRound {...ICON} />,
+            roles: all_admin_roles,
+          },
+          {
             key: "logging-and-alerts",
             page: "logging-and-alerts",
             label: "Logging & Alerts",

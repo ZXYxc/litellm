@@ -31,6 +31,8 @@ class ChatGPTConfig(OpenAIConfig):
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
         dynamic_api_base = self.authenticator.get_api_base()
+        if api_key:
+            return dynamic_api_base, api_key, custom_llm_provider
         try:
             dynamic_api_key = self.authenticator.get_access_token()
         except GetAccessTokenError as e:
@@ -55,9 +57,32 @@ class ChatGPTConfig(OpenAIConfig):
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
 
-        account_id = self.authenticator.get_account_id()
+        database_credential_id = litellm_params.get("chatgpt_oauth_credential_id")
+        if database_credential_id:
+            if not litellm_params.get("chatgpt_oauth_resolved") or not api_key:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider="chatgpt",
+                    message=f"ChatGPT OAuth credential was not resolved: {database_credential_id}",
+                )
+            account_id = litellm_params.get("chatgpt_account_id")
+            if not isinstance(account_id, str) or not account_id:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider="chatgpt",
+                    message=f"ChatGPT OAuth credential has no account identity: {database_credential_id}",
+                )
+        else:
+            account_id = self.authenticator.get_account_id()
         session_id = ensure_chatgpt_session_id(litellm_params)
         default_headers = get_chatgpt_default_headers(api_key or "", account_id, session_id)
+        if database_credential_id:
+            return {
+                **default_headers,
+                **validated_headers,
+                "Authorization": default_headers["Authorization"],
+                "ChatGPT-Account-Id": default_headers["ChatGPT-Account-Id"],
+            }
         return {**default_headers, **validated_headers}
 
     def post_stream_processing(self, stream: Any) -> Any:

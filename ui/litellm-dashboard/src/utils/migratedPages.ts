@@ -47,6 +47,7 @@ export const MIGRATED_PAGES: Record<string, string> = {
   "cost-optimization": "cost-optimization",
   agents: "agents",
   "router-settings": "router-settings",
+  "chatgpt-oauth": "chatgpt-oauth",
   users: "users",
   teams: "teams",
   organizations: "organizations",

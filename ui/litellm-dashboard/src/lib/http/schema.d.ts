@@ -1397,6 +1397,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chatgpt/oauth/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Accounts */
+        get: operations["list_accounts_chatgpt_oauth_accounts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chatgpt/oauth/accounts/{credential_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Account Status */
+        patch: operations["update_account_status_chatgpt_oauth_accounts__credential_id__status_patch"];
+        trace?: never;
+    };
+    "/chatgpt/oauth/device/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Device Flow */
+        post: operations["start_device_flow_chatgpt_oauth_device_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chatgpt/oauth/device/{flow_id}/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Poll Device Flow */
+        post: operations["poll_device_flow_chatgpt_oauth_device__flow_id__poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claude-code/marketplace.json": {
         parameters: {
             query?: never;
@@ -20334,6 +20402,48 @@ export interface components {
             /** Description */
             description?: string | null;
         };
+        /** AccountListResponse */
+        AccountListResponse: {
+            /** Accounts */
+            accounts: components["schemas"]["AccountResponse"][];
+        };
+        /** AccountResponse */
+        AccountResponse: {
+            /** Credential Id */
+            credential_id: string;
+            /** Credential Name */
+            credential_name: string;
+            /** Email */
+            email: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Refresh Backoff Until */
+            refresh_backoff_until?: string | null;
+            status: components["schemas"]["ChatGPTOAuthAccountStatus"];
+            /** Token Version */
+            token_version: number;
+        };
+        /** AccountStatusRequest */
+        AccountStatusRequest: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "disabled";
+        };
+        /** AccountStatusResponse */
+        AccountStatusResponse: {
+            /** Credential Id */
+            credential_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "disabled";
+        };
         /**
          * ActiveUsersAnalyticsResponse
          * @description Response for active users analytics
@@ -22149,6 +22259,11 @@ export interface components {
             /** Url */
             url: string;
         };
+        /**
+         * ChatGPTOAuthAccountStatus
+         * @enum {string}
+         */
+        ChatGPTOAuthAccountStatus: "active" | "disabled" | "reauth_required";
         /** ChatMessage */
         ChatMessage: {
             /** Content */
@@ -23460,6 +23575,35 @@ export interface components {
             model_name: string;
         } & {
             [key: string]: unknown;
+        };
+        /** DeviceFlowPollResponseModel */
+        DeviceFlowPollResponseModel: {
+            /** Credential Id */
+            credential_id?: string | null;
+            /** Credential Name */
+            credential_name?: string | null;
+            /** Email */
+            email?: string | null;
+            /** Status */
+            status: string;
+        };
+        /** DeviceFlowStartedResponse */
+        DeviceFlowStartedResponse: {
+            /** Credential Id */
+            credential_id: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Flow Id */
+            flow_id: string;
+            /** Interval Seconds */
+            interval_seconds: number;
+            /** User Code */
+            user_code: string;
+            /** Verification Url */
+            verification_url: string;
         };
         /**
          * DistinctTagResponse
@@ -30924,6 +31068,11 @@ export interface components {
              */
             total_tokens: number;
         };
+        /** StartDeviceFlowRequest */
+        StartDeviceFlowRequest: {
+            /** Credential Name */
+            credential_name: string;
+        };
         /**
          * SuccessfulKeyUpdate
          * @description Successfully updated key with its updated information
@@ -36017,6 +36166,125 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_accounts_chatgpt_oauth_accounts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountListResponse"];
+                };
+            };
+        };
+    };
+    update_account_status_chatgpt_oauth_accounts__credential_id__status_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                credential_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_device_flow_chatgpt_oauth_device_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartDeviceFlowRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceFlowStartedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    poll_device_flow_chatgpt_oauth_device__flow_id__poll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                flow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceFlowPollResponseModel"];
                 };
             };
             /** @description Validation Error */
