@@ -8,6 +8,7 @@ import time
 from io import StringIO
 from pathlib import Path
 from typing import List
+from unittest.mock import patch
 
 import pytest
 
@@ -39,6 +40,7 @@ from litellm._logging import (
     verbose_router_logger,
 )
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+from litellm.litellm_core_utils import secret_redaction
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 
@@ -1178,3 +1180,262 @@ def test_access_redaction_survives_the_uvicorn_json_log_config():
             lg.handlers[:] = handlers
             lg.setLevel(level)
             lg.propagate = True
+
+
+@pytest.mark.parametrize("json_output, expected_scans", [(False, 2), (True, 1)])
+def test_redaction_reuses_unchanged_values_within_one_handler(json_output, expected_scans, capfd):
+    message = "provider rejected request " + "x" * 4096
+    record = logging.LogRecord("test", logging.ERROR, __file__, 1, "%s", (message,), None)
+    record.detail = "diagnostic " + "y" * 4096
+    record.exc_info = (RuntimeError, RuntimeError("failure"), None)
+    record.exc_text = "Traceback: " + "z" * 4096
+    formatter = JsonFormatter() if json_output else CorrelationPlainFormatter("%(message)s")
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(formatter)
+    handler.addFilter(SecretRedactionFilter())
+    handler.addFilter(SecretRedactionFilter())
+    with patch.object(secret_redaction, "_SECRET_RE", wraps=secret_redaction._SECRET_RE) as regex:
+        assert handler.handle(record)
+        output = capfd.readouterr().err
+        scanned = [call.args[1] for call in regex.sub.call_args_list]
+    assert scanned.count(message) == expected_scans
+    assert scanned.count(record.detail) == expected_scans
+    assert scanned.count(record.exc_text) == expected_scans
+    assert message in output
+    assert record.exc_text in output
+    if json_output:
+        assert set(json.loads(output)) == {
+            "message",
+            "level",
+            "timestamp",
+            "detail",
+            "component",
+            "logger",
+            "stacktrace",
+        }
+
+
+def test_redaction_cache_is_not_shared_between_records(capfd):
+    message = "unchanged diagnostic"
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(SecretRedactionFilter())
+    with patch.object(secret_redaction, "_SECRET_RE", wraps=secret_redaction._SECRET_RE) as regex:
+        for _ in range(2):
+            record = logging.LogRecord("test", logging.INFO, __file__, 1, message, (), None)
+            handler.handle(record)
+        assert [call.args[1] for call in regex.sub.call_args_list].count(message) == 2
+    assert len(capfd.readouterr().out.splitlines()) == 2
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_redaction_rechecks_mutations_between_handlers(json_output):
+    from io import StringIO
+
+    secret = "sk-" + "a" * 24
+    record = logging.LogRecord("test", logging.ERROR, __file__, 1, "initial", (), None)
+    record.detail = "initial detail"
+    record.exc_info = (RuntimeError, RuntimeError("initial failure"), None)
+    formatter = JsonFormatter() if json_output else CorrelationPlainFormatter("%(message)s %(detail)s")
+    streams = (StringIO(), StringIO())
+    for index, stream in enumerate(streams):
+        handler = LevelRoutingStreamHandler()
+        handler.addFilter(SecretRedactionFilter())
+        handler.addFilter(SecretRedactionFilter())
+        handler.setFormatter(formatter)
+        if index:
+            record.msg = "changed %s"
+            record.args = (secret,)
+            record.detail = f"Bearer {secret}"
+            record.exc_text = f"Traceback: ValueError: https://host/?key={secret}"
+            record.nested = {"access_token": "opaque-value", "items": [secret]}
+        with patch.object(sys, "stderr", stream):
+            handler.handle(record)
+    output = streams[1].getvalue()
+    assert "changed REDACTED" in output
+    assert "Traceback: ValueError:" in output
+    assert secret not in output
+    if json_output:
+        assert json.loads(output)["nested"] == {"access_token": "REDACTED", "items": ["REDACTED"]}
+
+
+def test_json_redaction_rechecks_key_context_and_nul_cleaning(capfd):
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "opaque-value", (), None)
+    record.detail = "sk-abc\x00defghijklmnop"
+
+    def add_fields(current):
+        current.access_token = "opaque-value"
+        current.nested = {"password": ["opaque-value"]}
+        return True
+
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(SecretRedactionFilter())
+    handler.addFilter(add_fields)
+    handler.handle(record)
+    output = json.loads(capfd.readouterr().out)
+    assert output["message"] == "opaque-value"
+    assert output["detail"] == "REDACTED"
+    assert output["access_token"] == "REDACTED"
+    assert output["nested"] == {"password": ["REDACTED"]}
+
+
+def test_redaction_does_not_cache_changed_results_as_safe(capfd):
+    record = logging.LogRecord(
+        "test",
+        logging.INFO,
+        __file__,
+        1,
+        "sk------BEGIN PRIVATE KEY-----private-----END PRIVATE KEY-----suffixsuffix",
+        (),
+        None,
+    )
+
+    def check_intermediate(current):
+        assert current.msg == "sk-REDACTEDsuffixsuffix"
+        return True
+
+    handler = LevelRoutingStreamHandler()
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(SecretRedactionFilter())
+    handler.addFilter(check_intermediate)
+    handler.addFilter(SecretRedactionFilter())
+    handler.handle(record)
+    assert record.msg == "REDACTED"
+    assert json.loads(capfd.readouterr().out)["message"] == "REDACTED"
+
+
+def test_redaction_cache_cannot_be_forged_by_extra():
+    secret = "sk-" + "b" * 24
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, secret, (), None)
+    record._litellm_redaction_cache = {secret}
+    SecretRedactionFilter().filter(record)
+    output = JsonFormatter().format(record)
+    assert secret not in output
+    assert json.loads(output)["message"] == "REDACTED"
+
+
+def test_plain_redaction_keeps_final_cross_field_scan():
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "abcdefghijklmnop", (), None)
+    SecretRedactionFilter().filter(record)
+    assert record.msg == "abcdefghijklmnop"
+    assert CorrelationPlainFormatter("Bearer %(message)s").format(record) == "REDACTED"
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_standalone_formatter_redacts_exception_chain(json_output):
+    secret = "sk-" + "c" * 24
+    try:
+        try:
+            raise ValueError(f"https://host/?key={secret}")
+        except ValueError as error:
+            raise RuntimeError("provider failed") from error
+    except RuntimeError:
+        record = logging.LogRecord("test", logging.ERROR, __file__, 1, "failure %s", (secret,), sys.exc_info())
+    formatter = JsonFormatter() if json_output else CorrelationPlainFormatter("%(message)s")
+    output = formatter.format(record)
+    assert secret not in output
+    assert "ValueError" in output
+    assert "RuntimeError: provider failed" in output
+    assert "direct cause" in output
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_formatter_redacts_fields_added_after_filter(json_output):
+    secret = "sk-" + "d" * 24
+    record = logging.LogRecord("test", logging.ERROR, __file__, 1, "initial", (), None)
+    SecretRedactionFilter().filter(record)
+    record.msg = "updated %s"
+    record.args = (secret,)
+    record.detail = {"database_url": "postgres://user:password@host/db"}
+    record.exc_info = (RuntimeError, RuntimeError("changed error"), None)
+    record.exc_text = f"Traceback: changed {secret}"
+    formatter = JsonFormatter() if json_output else CorrelationPlainFormatter("%(message)s %(detail)s")
+    output = formatter.format(record)
+    assert secret not in output
+    assert "user:password" not in output
+    assert "Traceback: changed" in output
+
+
+def test_json_redaction_preserves_user_field_colliding_with_cache_name():
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "safe", (), None)
+    record._litellm_redaction_cache = "user diagnostic"
+    SecretRedactionFilter().filter(record)
+    assert json.loads(JsonFormatter().format(record))["_litellm_redaction_cache"] == "user diagnostic"
+
+
+def test_disabled_redaction_does_not_mark_sensitive_values_as_scanned(monkeypatch):
+    secret = "sk-" + "e" * 24
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, secret, (), None)
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", False)
+    SecretRedactionFilter().filter(record)
+    assert json.loads(JsonFormatter().format(record))["message"] == secret
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    assert secret not in JsonFormatter().format(record)
+
+
+def test_redaction_preserves_standard_record_serialization():
+    import logging.handlers
+    import subprocess
+
+    record = logging.LogRecord("httpx", logging.INFO, __file__, 1, "safe diagnostic", (), None)
+    original_fields = set(record.__dict__)
+    assert logging.getLogger("httpx").filter(record)
+    JsonFormatter().format(record)
+    assert set(record.__dict__) == original_fields
+    assert json.loads(json.dumps(record.__dict__))["msg"] == "safe diagnostic"
+    payload = logging.handlers.SocketHandler("unused", 0).makePickle(record)
+    receiver = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", "import pickle,sys; print(pickle.loads(sys.stdin.buffer.read())['msg'])"],
+        input=payload[4:],
+        capture_output=True,
+        check=True,
+    )
+    assert receiver.stdout == b"safe diagnostic\n"
+
+
+def test_nested_json_handler_restores_and_releases_redaction_scope(capfd):
+    message = "nested diagnostic " + "x" * 1024
+    outer_record = logging.LogRecord("outer", logging.INFO, __file__, 1, message, (), None)
+    inner_record = logging.LogRecord("inner", logging.INFO, __file__, 1, message, (), None)
+    inner = LevelRoutingStreamHandler()
+    inner.setFormatter(JsonFormatter())
+    inner.addFilter(SecretRedactionFilter())
+
+    def emit_nested(record):
+        inner.handle(inner_record)
+        return True
+
+    outer = LevelRoutingStreamHandler()
+    outer.setFormatter(JsonFormatter())
+    outer.addFilter(SecretRedactionFilter())
+    outer.addFilter(emit_nested)
+    outer.addFilter(SecretRedactionFilter())
+    with patch.object(secret_redaction, "_SECRET_RE", wraps=secret_redaction._SECRET_RE) as regex:
+        outer.handle(outer_record)
+        assert [call.args[1] for call in regex.sub.call_args_list].count(message) == 2
+        SecretRedactionFilter().filter(outer_record)
+        assert [call.args[1] for call in regex.sub.call_args_list].count(message) == 3
+    assert len(capfd.readouterr().out.splitlines()) == 2
+
+
+@pytest.mark.parametrize("fail_in_filter", [False, True])
+def test_json_handler_releases_redaction_scope_after_error(fail_in_filter):
+    class FailingHandler(LevelRoutingStreamHandler):
+        def emit(self, record):
+            raise RuntimeError("emit failed")
+
+    def fail_filter(record):
+        raise RuntimeError("filter failed")
+
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "unchanged diagnostic", (), None)
+    handler = FailingHandler()
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(SecretRedactionFilter())
+    if fail_in_filter:
+        handler.addFilter(fail_filter)
+    with patch.object(secret_redaction, "_SECRET_RE", wraps=secret_redaction._SECRET_RE) as regex:
+        with pytest.raises(RuntimeError, match=r"filter failed|emit failed"):
+            handler.handle(record)
+        SecretRedactionFilter().filter(record)
+        assert [call.args[1] for call in regex.sub.call_args_list].count(record.msg) == 2

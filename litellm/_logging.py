@@ -3,6 +3,7 @@ import contextvars
 import logging
 import os
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from logging import Formatter
 from typing import Any, Final, TextIO
@@ -70,10 +71,41 @@ def _redact_string(value: str) -> str:
     return redact_string(value)
 
 
-def _redact_structured_value(key: str | None, value: str) -> str:
+def _redact_structured_value(
+    key: str | None, value: str, *, value_redactor: Callable[[str], str] = _redact_string
+) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
-    return redact_structured_value(key, value)
+    return redact_structured_value(key, value, value_redactor=value_redactor)
+
+
+class _RecordRedactionCache:
+    """Reuse only unchanged scans: redaction can itself form a new credential pattern.
+
+    Keep bounded references within one handler call, never inputs that matched or
+    temporary key/value renderings. New content and structured key context still scan.
+    """
+
+    def __init__(self) -> None:
+        self._values: frozenset[str] = frozenset()
+
+    def redact(self, value: str) -> str:
+        if type(value) is str and value in self._values:
+            return value
+        redacted: Final = _redact_string(value)
+        if type(value) is str and redacted == value and len(self._values) < 32:
+            self._values = self._values.union((value,))
+        return redacted
+
+
+_active_redaction_cache: Final[contextvars.ContextVar[tuple[logging.LogRecord, _RecordRedactionCache] | None]] = (
+    contextvars.ContextVar("log_redaction_cache", default=None)
+)
+
+
+def _record_redactor(record: logging.LogRecord) -> Callable[[str], str]:
+    active: Final = _active_redaction_cache.get()
+    return active[1].redact if active is not None and active[0] is record else _redact_string
 
 
 def redact_secrets(value: str) -> str:
@@ -128,6 +160,7 @@ class SecretRedactionFilter(logging.Filter):
         if not _ENABLE_SECRET_REDACTION:
             return True
 
+        redactor: Final = _record_redactor(record)
         # Runs before args are cleared, and before the extra-field loop below
         # that redacts the substituted result.
         substituted_color_message: Final = _substituted_color_message(record)
@@ -135,23 +168,23 @@ class SecretRedactionFilter(logging.Filter):
             record.color_message = substituted_color_message  # rebind-ok: a Filter scrubs records in place
 
         try:
-            record.msg = _redact_string(record.getMessage())
+            record.msg = redactor(record.getMessage())
             record.args = None
         except Exception:
             if isinstance(record.msg, str):
-                record.msg = _redact_string(record.msg)
+                record.msg = redactor(record.msg)
 
         # Redact exception tracebacks
         if record.exc_info and record.exc_info[1] is not None:
             try:
-                record.exc_text = _redact_string(record.exc_text or self._formatter.formatException(record.exc_info))
+                record.exc_text = redactor(record.exc_text or self._formatter.formatException(record.exc_info))
             except Exception:
                 pass
 
         # Redact extra fields passed via logger.debug("msg", extra={...})
         for key, value in list(record.__dict__.items()):
             if key not in _STANDARD_RECORD_ATTRS and isinstance(value, str):
-                setattr(record, key, _redact_string(value))
+                setattr(record, key, redactor(value))
 
         return True
 
@@ -349,6 +382,15 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
     Invalid-key warnings route to stdout so LITELLM_LOG=ERROR can suppress them.
     """
 
+    def handle(self, record: logging.LogRecord) -> bool:
+        if not _ENABLE_SECRET_REDACTION or not isinstance(self.formatter, JsonFormatter):
+            return super().handle(record)
+        token: Final = _active_redaction_cache.set((record, _RecordRedactionCache()))
+        try:
+            return super().handle(record)
+        finally:
+            _active_redaction_cache.reset(token)
+
     def emit(self, record: logging.LogRecord) -> None:
         is_stdout_record: Final = record.levelno < logging.WARNING or (
             record.levelno == logging.WARNING and record.name == verbose_proxy_stdout_logger.name
@@ -504,7 +546,11 @@ class JsonFormatter(Formatter):
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
-        return safe_dumps(json_record, value_transform=_redact_structured_value)
+        redactor: Final = _record_redactor(record)
+        return safe_dumps(
+            json_record,
+            value_transform=lambda key, value: _redact_structured_value(key, value, value_redactor=redactor),
+        )
 
 
 class CorrelationPlainFormatter(logging.Formatter):

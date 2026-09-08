@@ -7,6 +7,7 @@ secrets from strings without depending on the logging-configuration module.
 """
 
 import re
+from collections.abc import Callable
 from typing import Final
 
 from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
@@ -113,7 +114,9 @@ def redact_internal_details(value: str) -> str:
     return _INTERNAL_DETAIL_RE.sub(REDACTED, redact_string(without_traceback))
 
 
-def redact_structured_value(key: str | None, value: str) -> str:
+def redact_structured_value(
+    key: str | None, value: str, *, value_redactor: Callable[[str], str] = redact_string
+) -> str:
     """Scrub *value* as it appeared under *key* inside a structured record.
 
     redact_string() replaces a whole ``key: value`` span with REDACTED, which is
@@ -122,7 +125,7 @@ def redact_structured_value(key: str | None, value: str) -> str:
     repr would, so the key-name patterns still fire, but collapses only the value
     so the caller's structure survives.
     """
-    scrubbed: Final = redact_string(value)
+    scrubbed: Final = value_redactor(value)
     if scrubbed != value or key is None:
         return scrubbed
     rendered: Final = f"'{key}': '{value}'"
